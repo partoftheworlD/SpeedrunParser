@@ -2,6 +2,8 @@ use chrono::Utc;
 use regex::Regex;
 use std::{fs::File, io::Write, path::Path, thread};
 
+const PAGE_SIZE: u32 = 50;
+
 fn filter(data: &str) -> Vec<String> {
     let re = Regex::new(r"game-name.*?<").unwrap();
     re.find_iter(data)
@@ -38,56 +40,58 @@ fn get_total() -> u32 {
     total
 }
 
-fn write_to_file(output_path: String, buffer: Vec<Vec<String>>) {
+fn write_to_file(output_path: String, g_box: Box<Vec<Vec<String>>>) {
     let path = Path::new(&output_path);
     let display = path.display();
     let mut file = match File::create(&path) {
         Err(why) => panic!("couldn't write to {}: {}", display, why),
         Ok(file) => file,
     };
-    buffer.into_iter().for_each(|i| {
-        i.into_iter().for_each(|j| {
-            match file.write_all(j.as_bytes()) {
+
+    g_box.into_iter().for_each(|unbox| {
+        unbox.into_iter().for_each(|string| {
+            match file.write_all(string.as_bytes()) {
                 Err(why) => panic!("couldn't write to {}: {}", display, why),
                 Ok(_) => (),
             };
-        });
+        })
     });
 }
 
 fn run() {
-    let n_workers = 4;
-    let total_pages: f32 = get_total() as f32 / 50.0;
-    let req_per_thread = (total_pages / n_workers as f32).round();
+    const WORKERS: u32 = 8;
     let now = Utc::now().timestamp_millis();
-    let mut pool = Vec::new();
-    let mut offset = 0;
+    let total_pages = get_total() as f32 / PAGE_SIZE as f32;
+    let req_per_thread = (total_pages / WORKERS as f32).round() as u32;
 
-    for thread_id in 0..n_workers {
-        let thread_handle = thread::spawn(move || {
-            offset = thread_id * 50 * req_per_thread as u32;
-            write_to_file(
-                format!("speedruncom_pc_{}_part_{}.txt", now, thread_id + 1).to_string(),
-                fun_name(offset, thread_id, req_per_thread as u32),
-            );
-        });
-        pool.push(thread_handle);
-    }
-    for thread in pool {
+    let thread_handles: Vec<_> = (0..WORKERS)
+        .map(|thread_id| {
+            thread::spawn(move || {
+                let offset = thread_id * PAGE_SIZE * req_per_thread;
+                write_to_file(
+                    format!("speedruncom_pc_{}_part_{}.txt", now, thread_id + 1).to_string(),
+                    make_request(offset, thread_id, req_per_thread),
+                );
+            })
+        })
+        .collect();
+
+    for thread in thread_handles {
         thread.join().unwrap();
     }
 }
 
-fn fun_name(offset: u32, thread_id: u32, req_per_thread: u32) -> Vec<Vec<String>> {
-    let mut game_array = Vec::new();
-    (offset..(thread_id + 1) * 50 * req_per_thread)
-        .step_by(50)
-        .for_each(|i| {
+fn make_request(offset: u32, thread_id: u32, req_per_thread: u32) -> Box<Vec<Vec<String>>> {
+    let mut g_box = Box::new(Vec::new());
+
+    (offset..(thread_id + 1) * PAGE_SIZE * req_per_thread)
+        .step_by(PAGE_SIZE as usize)
+        .for_each(|page| {
             let url = format!(
                 "https://www.speedrun.com/ajax_games.php?platform=PC&unofficial=off&start={}",
-                i
+                page
             );
-            game_array.push(filter(
+            g_box.push(filter(
                 &reqwest::blocking::get(&url)
                     .unwrap()
                     .text()
@@ -95,7 +99,7 @@ fn fun_name(offset: u32, thread_id: u32, req_per_thread: u32) -> Vec<Vec<String>
                     .as_str(),
             ));
         });
-    game_array
+    g_box
 }
 
 fn main() {
