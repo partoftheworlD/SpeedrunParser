@@ -61,7 +61,7 @@ fn write_to_file(output_path: String, g_box: Box<Vec<Vec<String>>>) {
 fn run() {
     const WORKERS: u32 = 8;
     let now = Utc::now().timestamp_millis();
-    let total_pages = get_total() as f32 / PAGE_SIZE as f32;
+    let total_pages = (get_total() as f32 / PAGE_SIZE as f32).round();
     let req_per_thread = (total_pages / WORKERS as f32).round() as u32;
 
     let thread_handles: Vec<_> = (0..WORKERS)
